@@ -1,0 +1,29 @@
+---
+title: 'Predicting NFL attendance #TidyTuesday'
+author: "Josh Faure"
+date: "25/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+theme_set(theme_bw())
+```
+
+The aim of this analysis is to predict future attendance figures across the NFL using historical information. Specifically we want to use three years of data to predict the more recent year, 2019.
+
+The data is sourced as part of #tidytuesday and can be found [here](https://github.com/rfordatascience/tidytuesday/blob/master/data/2020/2020-02-04/readme.md)
+
+## Data exploration
+
+```{r}
+# Get the Data
+attendance <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-04/attendance.csv')
+standings <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-04/standings.csv')
+games <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-04/games.csv')
+
+joined_data <- attendance %>% left_join(standings, by = c("year", "team_name", "team"))
+```
+
+
