@@ -1,0 +1,211 @@
+---
+title: 'Predicting likelihood of making the playoffs in the NFL #TidyTuesday'
+author: "Josh Faure"
+date: "25/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, scipen = 999)
+library(tidyverse)
+library(scales)
+library(RColorBrewer)
+theme_set(theme_bw())
+set.seed(73)
+```
+
+The aim of this analysis is to predict which teams will make the NFL playoffs using historical information. Specifically we want to use data from 2001 to 2018 to predict the most recent season, 2019.
+
+The data is sourced as part of #tidytuesday and can be found [here](https://github.com/rfordatascience/tidytuesday/blob/master/data/2020/2020-02-04/readme.md)
+
+## Data exploration
+
+```{r}
+# Get the Data
+attendance <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-04/attendance.csv')
+standings <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-04/standings.csv')
+games <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-02-04/games.csv')
+
+joined_data <- attendance %>% left_join(standings, by = c("year", "team_name", "team"))
+```
+
+```{r}
+# Number of attendees in the past 3 years
+attendance %>%
+  group_by(team_name, year) %>%
+  summarise(total = mean(total),
+            tot = sum(total)) %>%
+  top_n(3, year) %>% 
+  ungroup() %>%
+  group_by(team_name) %>%
+  mutate(tot3yr = sum(total)) %>%
+  ungroup() %>%
+  mutate(team_name = fct_reorder(team_name, tot3yr)) %>%
+  ggplot(aes(x = team_name, y = total, fill = as.factor(year))) +
+  geom_col() +
+  scale_y_continuous(labels = comma) +
+  coord_flip() +
+  labs(title = "Total number of attendees in the past 3 years",
+       x = "Team name",
+       y = "# of attendees",
+       fill = "Years")
+```
+
+```{r}
+# Winners of the Superbowl
+standings %>%
+  mutate(made_playoffs = as.integer(playoffs == "Playoffs")) %>%
+  group_by(team_name) %>%
+  summarise(nb_mp = sum(made_playoffs)) %>%
+  ungroup() %>%
+  filter(nb_mp != 0) %>%
+  mutate(team_name = fct_reorder(team_name, nb_mp)) %>%
+  ggplot(aes(team_name, nb_mp, fill = nb_mp)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Made the playoffs",
+       y = "# of playoffs",
+       x = "team_name",
+       fill = "# of playoffs")
+
+multiple_appearances <- standings %>%
+  mutate(made_playoffs = as.integer(playoffs == "Playoffs")) %>%
+  group_by(team_name) %>%
+  summarise(prop_playoffs = sum(made_playoffs) / n()) %>%
+  filter(prop_playoffs >= 0.5) %>%
+  select(team_name) %>%
+  pull
+```
+
+```{r}
+# Data preparation for final visualisation
+stand_df <- standings %>%
+  mutate(made_playoffs = as.integer(playoffs == "Playoffs")) %>%
+  mutate_at(.vars = c("wins", "loss", "points_differential", "margin_of_victory", "offensive_ranking", "defensive_ranking"), rescale) %>%
+  pivot_longer(cols = c("wins", "loss", "points_differential", "margin_of_victory", "offensive_ranking", "defensive_ranking"), names_to = "measure", values_to = "value") %>%
+  mutate(ty = paste(team_name, year, sep = "-"),
+         tc = ifelse(team_name %in% multiple_appearances, team_name, "Others")) %>%
+  mutate(measure = str_to_title(str_replace_all(measure, "_", " ")))
+
+
+mp_df <- stand_df %>% 
+  filter(tc != "Others", made_playoffs == 1)
+
+mp_uni <- stand_df %>% 
+  filter(tc == "Others", made_playoffs == 1)
+```
+
+```{r}
+# Mix the 3 groups for the final plot
+final_plot <- stand_df %>%
+  filter(tc == "Others") %>%
+  filter(made_playoffs == 0) %>%
+  ggplot(aes(measure, value))+
+  geom_jitter(color = "grey", width = 0.15, alpha = 0.3)+
+  geom_line(aes(group = ty), color = "grey", alpha = 0.2) +
+  geom_point(data = mp_uni, aes(measure, value, group = ty, color = "Other"), size = 1, alpha = 0.3)+
+  geom_line(data = mp_uni, aes(measure, value, group = ty, color = "Other"), size = 0.7, alpha = 0.3)+
+  geom_point(data = mp_df, aes(measure, value, color = tc, group = ty), size = 1)+
+  geom_line(data = mp_df, aes(measure, value, color = tc, group = ty), size = 0.7)+
+  scale_color_brewer(palette = "Set1")+
+  labs(title = "Comparison of team performance",
+       subtitle = "Highlighting the teams that made the playoffs, \n with a focus on the teams who made the playoffs at least half of the time",
+       x = "Metric",
+       y = "Measure (scaled 0 to 1)",
+       color = "Team",
+       caption = "Visualization: Josh Faure | Data: Pro Football Reference | #tidytuesday")+
+  theme(plot.background = element_blank(),
+        plot.title = element_text(hjust = 0.5, size = 14),
+        plot.subtitle = element_text(hjust = 0.5, size = 12),
+        panel.background = element_blank(),
+        # axis.text.x = element_text(angle = 60, hjust = 0.5, size = 12),
+        axis.text.y = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.x = element_blank())
+
+final_plot
+
+ggsave("NFL_team_performance.png", final_plot, width = 210, height = 150, units = "mm")
+```
+
+
+## Model building
+
+```{r}
+model_df <- standings %>%
+  mutate(made_playoffs = as.integer(playoffs == "Playoffs"),
+         playoffs = as.integer(playoffs == "Playoffs"),
+         sb_winner = as.integer(sb_winner == "Won Superbowl")) %>% 
+  group_by(team_name) %>% 
+  arrange(year, .by_group = TRUE) %>% 
+  mutate_at(.vars = c("wins", "loss", "points_differential", "simple_rating", "margin_of_victory", "offensive_ranking", "defensive_ranking", "playoffs", "sb_winner"), lag) %>% 
+  select(-team) %>% 
+  filter(year != 2000) %>% ungroup() %>% drop_na()
+
+
+library(tidymodels) # need to update to use initial_time_split()
+model_train <- model_df %>% filter(year != 2019)
+model_test <- model_df %>% filter(year == 2019)
+```
+
+```{r}
+model_rec <- recipe(made_playoffs ~ ., data = model_train) %>%
+  update_role(team_name, new_role = "ID")
+
+model_prep <- prep(model_rec)
+juiced <- juice(model_prep)
+```
+
+```{r}
+tune_spec <- rand_forest(
+  mtry = tune(),
+  trees = 1000,
+  min_n = tune()
+) %>%
+  set_mode("classification") %>%
+  set_engine("ranger")
+```
+
+
+```{r}
+tune_wf <- workflow() %>%
+  add_recipe(model_rec) %>%
+  add_model(tune_spec)
+```
+
+```{r}
+trees_folds <- vfold_cv(trees_train)
+
+doParallel::registerDoParallel()
+
+set.seed(345)
+tune_res <- tune_grid(
+  tune_wf,
+  resamples = trees_folds,
+  grid = 20
+)
+
+tune_res
+```
+
+```{r}
+tune_res %>%
+  collect_metrics() %>%
+  filter(.metric == "roc_auc") %>%
+  select(mean, min_n, mtry) %>%
+  pivot_longer(min_n:mtry,
+    values_to = "value",
+    names_to = "parameter"
+  ) %>%
+  ggplot(aes(value, mean, color = parameter)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = NULL, y = "AUC")
+```
+
+## Model evaluation
+
+```{r}
+
+```
+
