@@ -133,63 +133,100 @@ ggsave("NFL_team_performance.png", final_plot, width = 210, height = 150, units 
 
 ```{r}
 model_df <- standings %>%
-  mutate(made_playoffs = as.integer(playoffs == "Playoffs"),
+  mutate(made_playoffs = as.factor(as.integer(playoffs == "Playoffs")),
          playoffs = as.integer(playoffs == "Playoffs"),
          sb_winner = as.integer(sb_winner == "Won Superbowl")) %>% 
   group_by(team_name) %>% 
   arrange(year, .by_group = TRUE) %>% 
   mutate_at(.vars = c("wins", "loss", "points_differential", "simple_rating", "margin_of_victory", "offensive_ranking", "defensive_ranking", "playoffs", "sb_winner"), lag) %>% 
   select(-team) %>% 
-  filter(year != 2000) %>% ungroup() %>% drop_na()
+  filter(year != 2000) %>% ungroup() %>% drop_na() 
 
-
-library(tidymodels) # need to update to use initial_time_split()
-model_train <- model_df %>% filter(year != 2019)
-model_test <- model_df %>% filter(year == 2019)
+library(tidymodels) 
+set.seed(73)
+model_split <- model_df %>% initial_split(strata = made_playoffs)
+model_train <- training(model_split)
+model_test <- testing(model_split)
 ```
 
 ```{r}
-model_rec <- recipe(made_playoffs ~ ., data = model_train) %>%
-  update_role(team_name, new_role = "ID")
-
-model_prep <- prep(model_rec)
-juiced <- juice(model_prep)
-```
-
-```{r}
-tune_spec <- rand_forest(
+rf_spec <- rand_forest(
   mtry = tune(),
   trees = 1000,
   min_n = tune()
 ) %>%
   set_mode("classification") %>%
   set_engine("ranger")
+
+xgb_spec <-  boost_tree(
+  trees = 1000,
+  tree_depth = tune(), min_n = tune(), loss_reduction = tune(),
+  sample_size = tune(), mtry = tune(),
+  learn_rate = tune()
+) %>% 
+  set_mode("classification") %>% 
+  set_engine("xgboost")
 ```
 
-
 ```{r}
-tune_wf <- workflow() %>%
-  add_recipe(model_rec) %>%
-  add_model(tune_spec)
+rf_grid <- grid_latin_hypercube(
+  min_n(),
+  finalize(mtry(), model_train %>% select(-made_playoffs)),
+  size = 30
+)
+
+xgb_grid <- grid_latin_hypercube(
+  tree_depth(),
+  min_n(),
+  loss_reduction(),
+  sample_size = sample_prop(),
+  finalize(mtry(), model_train %>% select(-made_playoffs)),
+  learn_rate(),
+  size = 30
+)
 ```
 
 ```{r}
-trees_folds <- vfold_cv(trees_train)
+rf_wf <- workflow() %>%
+  add_formula(made_playoffs ~ .) %>%
+  add_model(rf_spec)
+
+xgb_wf <- workflow() %>%
+  add_formula(made_playoffs ~ .) %>%
+  add_model(xgb_spec)
+```
+
+```{r}
+set.seed(73)
+model_folds <- vfold_cv(model_train, strata = made_playoffs)
 
 doParallel::registerDoParallel()
 
-set.seed(345)
-tune_res <- tune_grid(
-  tune_wf,
-  resamples = trees_folds,
-  grid = 20
+set.seed(73)
+rf_res <- tune_grid(
+  rf_wf,
+  resamples = model_folds,
+  grid = rf_grid,
+  control = control_grid(save_pred = TRUE)
 )
 
-tune_res
+rf_res
+
+xgb_res <- tune_grid(
+  xgb_wf,
+  resamples = model_folds,
+  grid = xgb_grid,
+  control = control_grid(save_pred = TRUE)
+)
+
+xgb_res
 ```
 
+
+## Model evaluation
+
 ```{r}
-tune_res %>%
+rf_res %>%
   collect_metrics() %>%
   filter(.metric == "roc_auc") %>%
   select(mean, min_n, mtry) %>%
@@ -201,11 +238,45 @@ tune_res %>%
   geom_point(show.legend = FALSE) +
   facet_wrap(~parameter, scales = "free_x") +
   labs(x = NULL, y = "AUC")
+
+xgb_res %>%
+  collect_metrics() %>%
+  filter(.metric == "roc_auc") %>%
+  select(mean, mtry:sample_size) %>%
+  pivot_longer(mtry:sample_size,
+    values_to = "value",
+    names_to = "parameter"
+  ) %>%
+  ggplot(aes(value, mean, color = parameter)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = NULL, y = "AUC")
 ```
 
-## Model evaluation
+```{r}
+rf_res %>%
+  show_best("roc_auc")
+
+rf_best_auc <- rf_res %>%
+  select_best("roc_auc")
+
+final_rf <- rf_wf %>% finalize_workflow(rf_best_auc)
+
+xgb_res %>%
+  show_best("roc_auc")
+
+xgb_best_auc <- xgb_res %>%
+  select_best("roc_auc")
+
+final_xgb <- xgb_wf %>% finalize_workflow(xgb_best_auc)
+```
 
 ```{r}
+library(vip)
 
+final_xgb %>% 
+  fit(data = model_train) %>% 
+  pull_workflow_fit() %>% 
+  vip(geom = "point")
 ```
 
