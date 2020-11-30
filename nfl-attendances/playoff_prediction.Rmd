@@ -132,6 +132,8 @@ ggsave("NFL_team_performance.png", final_plot, width = 210, height = 150, units 
 ## Model building
 
 ```{r}
+############################# Data Partitioning ###############################
+###############################################################################
 model_df <- standings %>%
   mutate(made_playoffs = as.factor(as.integer(playoffs == "Playoffs")),
          playoffs = as.integer(playoffs == "Playoffs"),
@@ -147,9 +149,25 @@ set.seed(73)
 model_split <- model_df %>% initial_split(strata = made_playoffs)
 model_train <- training(model_split)
 model_test <- testing(model_split)
+model_folds <- vfold_cv(model_train, strata = made_playoffs)
 ```
 
 ```{r}
+############################# Preprocessing ###################################
+###############################################################################
+mod_rec <- recipe(made_playoffs ~ ., data = model_train) %>% 
+  step_dummy(team_name)
+
+mod_prep <- prep(mod_rec)
+```
+
+```{r}
+############################# Model Tuning ####################################
+###############################################################################
+# specify model and hyperparamters
+glm_spec <- logistic_reg() %>%
+  set_engine("glm")
+
 rf_spec <- rand_forest(
   mtry = tune(),
   trees = 1000,
@@ -166,9 +184,8 @@ xgb_spec <-  boost_tree(
 ) %>% 
   set_mode("classification") %>% 
   set_engine("xgboost")
-```
 
-```{r}
+# set tuning grid
 rf_grid <- grid_latin_hypercube(
   min_n(),
   finalize(mtry(), model_train %>% select(-made_playoffs)),
@@ -187,22 +204,33 @@ xgb_grid <- grid_latin_hypercube(
 ```
 
 ```{r}
+glm_wf <- workflow() %>%
+  add_recipe(mod_rec) %>% 
+  add_model(glm_spec)
+
 rf_wf <- workflow() %>%
-  add_formula(made_playoffs ~ .) %>%
+  add_recipe(mod_rec) %>% 
   add_model(rf_spec)
 
 xgb_wf <- workflow() %>%
-  add_formula(made_playoffs ~ .) %>%
+  add_recipe(mod_rec) %>% 
   add_model(xgb_spec)
 ```
 
 ```{r}
-set.seed(73)
-model_folds <- vfold_cv(model_train, strata = made_playoffs)
-
 doParallel::registerDoParallel()
 
 set.seed(73)
+glm_rs <- fit(
+  glm_wf,
+  model_train
+)
+# glm_rs <- fit_resamples(
+#   glm_wf,
+#   resamples = model_folds,
+#   control = control_resamples(save_pred = TRUE)
+# )
+
 rf_res <- tune_grid(
   rf_wf,
   resamples = model_folds,
@@ -226,6 +254,8 @@ xgb_res
 ## Model evaluation
 
 ```{r}
+############################# Model Training ##################################
+###############################################################################
 rf_res %>%
   collect_metrics() %>%
   filter(.metric == "roc_auc") %>%
@@ -254,28 +284,90 @@ xgb_res %>%
 ```
 
 ```{r}
+############################# Validation ######################################
+###############################################################################
+# Select best parameters & finalize workflow
 rf_res %>%
   show_best("roc_auc")
 
-rf_best_auc <- rf_res %>%
-  select_best("roc_auc")
+final_rf <- finalize_workflow(
+  rf_wf,
+  select_best(rf_res,"roc_auc")
+)
 
-final_rf <- rf_wf %>% finalize_workflow(rf_best_auc)
+final_rf_model <- finalize_model(
+  rf_spec,
+  select_best(rf_res,"roc_auc")
+)
 
 xgb_res %>%
-  show_best("roc_auc")
+  show_best("roc_auc") %>% View()
 
-xgb_best_auc <- xgb_res %>%
-  select_best("roc_auc")
+final_xgb <- xgb_wf %>% 
+  select_best("roc_auc") %>% 
+  finalize_workflow() 
 
-final_xgb <- xgb_wf %>% finalize_workflow(xgb_best_auc)
+final_xgb_model <- finalize_model(
+  xgb_spec,
+  select_best(xgb_res,"roc_auc")
+)
+
+
+# Refit using the entire training data
+fit_train_rf <- final_rf %>% 
+  fit(data = model_train)
+
+fit_train_xgb <- final_xgb %>% 
+  fit(data = model_train)
+
+# Last fit
+final_rf_res <- final_rf %>% 
+  last_fit(model_split)
+
+final_rf_res %>% 
+  collect_metrics()
+
+final_rf_res %>% 
+  collect_predictions()
+
+final_xgb_res <- final_xgb %>% 
+  last_fit(model_split)
+
+final_xgb_res %>% 
+  collect_metrics()
+
+final_xgb_res %>% 
+  collect_predictions()
+
+# Predict on test data
+fit_test_xgb <- fit_train_xgb %>% 
+  predict(new_data = model_test) %>% 
+  bind_cols(model_test, .) %>%
+  select(made_playoffs, .pred_class) %>% 
+  metrics(made_playoffs, .pred_class)
 ```
 
 ```{r}
+############################# Variable Importance #############################
+###############################################################################
 library(vip)
 
-final_xgb %>% 
-  fit(data = model_train) %>% 
+final_rf_model %>% 
+  set_engine("ranger", importance = "permutation") %>% 
+  fit(made_playoffs ~ .,
+      data = juice(mod_prep)) %>%  
+  vip(geom = "col")
+
+# fit_train_xgb %>% 
+#   pull_workflow_fit() %>% 
+#   vip(
+#     method = "shap",
+#     train = juice(mod_prep),
+#     feature_names = names(juice(mod_prep) %>% select(-made_playoffs)),
+#     pred_wrapper = predict
+#           )
+
+fit_train_xgb %>% 
   pull_workflow_fit() %>% 
   vip(geom = "point")
 ```
