@@ -303,9 +303,10 @@ final_rf_model <- finalize_model(
 xgb_res %>%
   show_best("roc_auc") %>% View()
 
-final_xgb <- xgb_wf %>% 
-  select_best("roc_auc") %>% 
-  finalize_workflow() 
+final_xgb <- finalize_workflow(
+  xgb_wf,
+  select_best(xgb_res,"roc_auc")
+)
 
 final_xgb_model <- finalize_model(
   xgb_spec,
@@ -339,12 +340,12 @@ final_xgb_res %>%
 final_xgb_res %>% 
   collect_predictions()
 
-# Predict on test data
-fit_test_xgb <- fit_train_xgb %>% 
-  predict(new_data = model_test) %>% 
-  bind_cols(model_test, .) %>%
-  select(made_playoffs, .pred_class) %>% 
-  metrics(made_playoffs, .pred_class)
+# # Predict on test data
+# fit_test_xgb <- fit_train_xgb %>% 
+#   predict(new_data = model_test) %>% 
+#   bind_cols(model_test, .) %>%
+#   select(made_playoffs, .pred_class) %>% 
+#   metrics(made_playoffs, .pred_class)
 ```
 
 ```{r}
