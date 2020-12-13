@@ -52,7 +52,7 @@ attendance %>%
 ```
 
 ```{r}
-# Winners of the Superbowl
+# Made playoffs
 standings %>%
   mutate(made_playoffs = as.integer(playoffs == "Playoffs")) %>%
   group_by(team_name) %>%
