@@ -221,7 +221,7 @@ The plot looks at the relationship between each numeric variable and making the 
 * Points against: Teams who make the playoffs score approximately 100 more points during the season, than teams who do not make the playoffs;
 * Points differential: Teams who make the playoffs score approximately 100 more points during the season, than teams who do not make the playoffs;
 * Margin of victory: Teams who make the playoffs have a larger and positive margin of victory, on average;
-* Strength of schedule: There does not appear to be much of a difference with regards to strength of schedule, however teams who make the playoffs have a lower stength of schedule; 
+* Strength of schedule: There does not appear to be much of a difference with regards to strength of schedule, however teams who make the playoffs have a lower strength of schedule; 
 * Simple rating: Teams who make the playoffs have a higher simple rating;
 * Offensive ranking: Higher offensive ranking for those who make the playoffs; and
 * Defensive ranking: Higher defensive ranking for those who make the playoffs.
@@ -246,153 +246,6 @@ model_df %>%
   scale_fill_manual(values = c("blue", "orange")) + 
   scale_colour_manual(values = c("blue", "orange"))
 
-```
-
-As mentioned above the 'credit card' and 'Active member' variables shouldn't be visualised using a boxplot. To generate the following plot, the variables are firstly converted to factors and then the plot explores whether there is a relationship with churn. Having a credit card doesn't appear to impact the customers likelihood to churn. Alternatively, whether the customer is considered active, definately has a relationship, 'Active' customers have much lower liklihood of churning.
-
-```{r echo = FALSE, warning = FALSE, message = FALSE, fig.align="center"}
-
-# Visualise models
-grid.arrange(
-             widths = c(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-             layout_matrix = 
-                      rbind(c(1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2),
-                            c(1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2),
-                            c(1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2),
-                            c(1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2),
-                            c(1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2),
-                            c(1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2)),
-             
-          # Distribution by Credit Card
-          df_churn %>%
-            mutate(hascrcard = factor(hascrcard, labels = c("No Card", "Has Card"))) %>%
-            group_by(hascrcard, exited) %>%
-            count() %>%
-            ggplot(aes(x = hascrcard, y = n, fill = exited)) +
-            geom_col(position = "fill") +
-            scale_y_continuous(labels = scales::percent) +
-            labs(y = NULL, x = NULL) +
-            theme(plot.title = element_text(hjust = 0.5),
-                  legend.position = "bottom") +
-            ggtitle("Credit Card"),
-          
-          
-          # Distribution by isactivemember
-          df_churn %>%
-            mutate(isactivemember = factor(isactivemember, labels = c("Inactive", "Active"))) %>%
-            group_by(isactivemember, exited) %>%
-            count() %>%
-            ggplot(aes(x = isactivemember, y = n, fill = exited)) +
-            geom_col(position = "fill") +
-            scale_y_continuous(labels = scales::percent) +
-            labs(y = NULL, x = NULL) +
-            theme(plot.title = element_text(hjust = 0.5),
-                  legend.position = "bottom") +
-            ggtitle("Active Member")
-            )
-```
-
-The plot below indicates that the numerical predictors are not particularly correlated, so no actions are required to address multicollinariety.
-
-```{r warning = FALSE, message = FALSE, fig.align="center"}
-
-# Create a variable of total family size
-corrplot(cor(df_churn %>% select_if(is.numeric)))
-
-```
-
-
-# Feature Engineering
-
-An important part of the model building process is to try and create new predictors which will improve the accuracy of the model. The information gained from the exploratory analysis, provides a couple of ideas as to which variables can be generated.
-
-### Surname
-
-Given that the surname has circa 3k unique entries, it is unlikely that the variable will be entered into the model. Instead some of the information embedded will be used to generate new variables. The first variable which will be created is a count of the total number of family members with the same surname. As seen in the section above this appeared to show a negatively correlated relationship.
-
-```{r warning = FALSE, message = FALSE}
-
-# Create a variable of total family size
-df_churn <-
-  df_churn %>%
-  left_join(df_churn %>%
-              group_by(surname, exited) %>%
-              count() %>%
-              spread(exited, n) %>%
-              replace_na(list(Churn = 0, Remain = 0)) %>%
-              mutate(total_family = Churn + Remain) %>%
-              select(surname, total_family),
-            by = "surname")
-
-```
-
-Without commiting to a thorough text analytics, there might be some value in seeing if the attributes of a surname has a relationship with whether they churn. A simple approach is taken here, firstly 26 new columns are created to capture each letter of the alphabet a:z. Then for each surname those columns are populated with the counts of times the letter appeared in the surname. The final step is to try and reduce the new 26 columns down, a Principle Component Analysis (PCA) was conducted to achieve this. The output below shows that the first 10 principle components represent 75% of the variation in the letters associated with surnames.
-
-```{r warning = FALSE, message = FALSE}
-#Create a df with 26 columns
-df_alphabet <-  
-  cbind(
-        df_churn %>%
-          select(surname),
-        matrix(0, nrow = nrow(df_churn), ncol = 26) %>%
-        as.data.frame() %>%
-        set_names(., c("a", "b", "c", "d", "e", "f", "g", "h", 
-                       "i", "j", "k", "l", "m", "n", "o", "p", 
-                       "q", "r", "s", "t", "u", "v", "w", "x", 
-                       "y", "z"))
-        )
-
-# Fill df with counts of letters in customer's name
-df_alphabet[2:ncol(df_alphabet)] <-
-  sapply(names(df_alphabet[2:ncol(df_alphabet)]), function(x) {str_count(df_alphabet[,1], x)})
-  
-
-# Create PCA analysis and plot
-pca <- prcomp(df_alphabet[2:ncol(df_alphabet)])
-summary(pca) 
-
-```
-
-The plot below shows the distribution of churn and remain for the first 10 principle components just created. There does not appear to be much variation based on the name based components, however this will be explored more rigourously during feature selection.
-
-```{r warning = FALSE, message = FALSE, fig.align="center"}
-
-# Visualise relationship with churn
-cbind(df_churn %>% select(exited), pca$x[,1:10]) %>%
-  gather(-exited, key = "var", value = "value") %>%
-  mutate(var = as.numeric(substr(var, 3,4))) %>%
-  ggplot(aes(x = exited, y = value, fill = exited)) +
-    geom_boxplot() +
-    facet_grid(. ~ var) +
-    theme(axis.text.x = element_text(angle = 90),
-          legend.position = "none",
-          plot.title = element_text(hjust = 0.5)) +
-    ggtitle("Surname PCA and Churn/ Remain")
-
-
-# Update churn dataframe
-df_churn <-
-  cbind(df_churn,
-        pca$x[,1:10]) %>%
-  rename_at(vars(starts_with('PC')), funs(paste0('Name', .)))
-
-rm(df_alphabet, pca) # reduce memory size
-
-```
-
-#### Tenure
-
-The exploratory analysis revealed that the distribution of tenure for customers who left the bank was a lot wider than those who remained. It suggested that maybe newer and longer standing customers were at higher risk of churn, while medium term customers had a lower likelihood. As such a new variable will be created which splits tenure into less than 3 being a new cusotmer and being longer than 7 being older customer.
-
-```{r warning = FALSE, message = FALSE}
-
-# Create a variable
-df_churn <-
-  df_churn %>%
-    mutate(tenure_fct = factor(case_when(tenure <= 3 ~ "New",
-                                         tenure >= 7 ~ "Long",
-                                         TRUE ~ "Medium"),
-                               level = c("New", "Medium", "Long")))
 ```
 
 
@@ -909,7 +762,7 @@ df_thresholds <-
 df_thresholds %>% kable(align = c('c', 'c', 'c', 'c', 'c', 'c', 'c', 'c'))
 ```
 
-Averageing the results from the cross validation above shows that the average threshold which should be applied is 20.8% In essence is we apply this threshold rather 50% we will reduce how accurate we are at predicting customers who remain, but significantly improve how well we predict customers that churn.
+Averaging the results from the cross validation above shows that the average threshold which should be applied is 20.8% In essence is we apply this threshold rather 50% we will reduce how accurate we are at predicting customers who remain, but significantly improve how well we predict customers that churn.
 
 ```{r warning = FALSE, message = FALSE}
 

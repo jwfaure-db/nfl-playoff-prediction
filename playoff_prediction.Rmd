@@ -125,7 +125,7 @@ final_plot <- stand_df %>%
 
 final_plot
 
-ggsave("NFL_team_performance.png", final_plot, width = 210, height = 150, units = "mm")
+ggsave("plots/NFL_team_performance.png", final_plot, width = 210, height = 150, units = "mm")
 ```
 
 
@@ -353,11 +353,13 @@ final_xgb_res %>%
 ###############################################################################
 library(vip)
 
-final_rf_model %>% 
+rf_vip <- final_rf_model %>% 
   set_engine("ranger", importance = "permutation") %>% 
   fit(made_playoffs ~ .,
-      data = juice(mod_prep)) %>%  
-  vip(geom = "col")
+      data = juice(mod_prep)) %>% 
+  vip(geom = "point", mapping = aes_string(color = "Variable")) + 
+  ggtitle("Random Forest") +
+  theme(plot.title = element_text(hjust = 0.5))
 
 # fit_train_xgb %>% 
 #   pull_workflow_fit() %>% 
@@ -368,8 +370,14 @@ final_rf_model %>%
 #     pred_wrapper = predict
 #           )
 
-fit_train_xgb %>% 
+xgb_vip <- fit_train_xgb %>% 
   pull_workflow_fit() %>% 
-  vip(geom = "point")
+  vip(geom = "point", mapping = aes_string(color = "Variable")) +
+  ggtitle("XGBoost") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+vip_plots <- grid.arrange(rf_vip, xgb_vip, ncol = 2)
+
+ggsave(vip_plots, filename = "plots/model_vip.png", height = 4, width = 7, units = "in")
 ```
 
